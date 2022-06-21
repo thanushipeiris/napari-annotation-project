@@ -9,7 +9,7 @@ class Param:
     """
     Class for keeping track of processing parameters.
     
-    Paramters
+    Parameters
     ---------
     project_path: str
         path where the project is saved
@@ -21,13 +21,22 @@ class Param:
         flat list of rois for each file
     local_project: bool
         if True, images are saved in local folder
-    
+    roi_index_to_stackID: dict str:{int:int}
+        filepath mapped to roi indexes mapped to stackID
+    stackID_to_roi_indexes: dict str:{int: list[int]}
+        filepath mapped to stackID to list of roi indexes in that stack
+    last_stackID: dict str:int
+        filepath mapped to tally of the highest stackID used (for determining
+        next stackID)
     """
     project_path: str = None
     file_paths: list[str] = None
     channels: dict = field(default_factory=dict)
     rois: dict = field(default_factory=dict)
     local_project: bool = False
+    roi_index_to_stackID: dict = field(default_factory=dict)
+    stackID_to_roi_indexes: dict = field(default_factory=dict)
+    last_stackID: dict = field(default_factory=dict)
 
     def save_parameters(self, alternate_path=None):
         """Save parameters as yml file.

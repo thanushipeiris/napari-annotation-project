@@ -73,8 +73,8 @@ class ProjectWidget(QWidget):
         self.roi_size.setValue(128)
         self._project_layout.addWidget(self.roi_size)
         self.roi_width = QSpinBox(visible=False)
-        self.roi_width.setMaximum(10000)
-        self.roi_width.setValue(0)
+        self.roi_width.setMinimum(1)
+        self.roi_width.setValue(1)
         self._project_layout.addWidget(self.roi_width)
         self.btn_add_roi = QPushButton('Add ROI', visible=False)
         self._project_layout.addWidget(self.btn_add_roi)
@@ -200,6 +200,11 @@ class ProjectWidget(QWidget):
         self._update_params_file_list()
         self.params.channels.pop(file_index)
         self.params.rois.pop(file_index)
+
+        self.params.roi_index_to_stackID.pop(file_index)
+        self.params.stackID_to_roi_indexes.pop(file_index)
+        self.params.last_stackID.pop(file_index)
+
         self.params.save_parameters()
         annotation_file = Path(self._create_annotation_filename_current(file_index))
         if annotation_file.exists():
@@ -223,6 +228,14 @@ class ProjectWidget(QWidget):
                 self.params.channels[f] = None
             if f not in self.params.rois.keys():
                 self.params.rois[f] = []
+
+            if f not in self.params.roi_index_to_stackID.keys():
+                self.params.roi_index_to_stackID[f] = {}
+            if f not in self.params.stackID_to_roi_indexes.keys():
+                self.params.stackID_to_roi_indexes[f] = {}
+            if f not in self.params.last_stackID.keys():
+                self.params.last_stackID[f] = -1
+
         self.params.save_parameters()
 
     def _on_check_copy_files(self):
@@ -313,12 +326,13 @@ class ProjectWidget(QWidget):
     def _first_changed_roi_i(self):
         current_roi_num = len(self.viewer.layers['rois'].data)
         for i in range(current_roi_num):
-            print(i)
-            print("current roi changed:",
-                  list(self.viewer.layers['rois'].data[
-                           i].flatten()))
-            print("old     roi changed:", self.params.rois[
-                self._get_current_file()][i])
+            #print(i)
+            #print("current roi changed:",
+            #      list(self.viewer.layers['rois'].data[
+            #               i].flatten()))
+            #print("old     roi changed:", self.params.rois[
+            #    self._get_current_file()][i])
+
             if not np.array_equal(list(self.viewer.layers['rois'].data[
                                        i].flatten()),
                         self.params.rois[self._get_current_file()][i]):
@@ -335,28 +349,30 @@ class ProjectWidget(QWidget):
         current_roi_num = len(self.viewer.layers['rois'].data)
         past_roi_num = len(self.params.rois[self._get_current_file()])
 
+        # there are stacks
         if (len(self.roi_index_to_stackID) > 0):
 
-            # roi was moved
             # TODO there might be a event specifically for moving, deleting
-            #  shapes - would make faster
+            #  shapes - would make faster BUT do selecting stack together
+            #  first
             # https://github.com/napari/napari/pull/2992
+            # roi was moved
             if (current_roi_num == past_roi_num):
                 print("first_changed_roi_i", self._first_changed_roi_i())
                 first_changed_roi = self._first_changed_roi_i()
                 if first_changed_roi >=0:
                     print("(current_roi_num == past_roi_num)")
-                    self._move_stack(first_changed_roi)
+
+                    # if ROI is in stack we will move linked ROIs
+                    if first_changed_roi in self.roi_index_to_stackID.keys():
+                        self._move_stack(first_changed_roi)
+
             # roi was deleted - must update ROI stack dicts
             elif (current_roi_num < past_roi_num):
                 first_changed_roi = self._first_changed_roi_i()
                 print("first_changed_roi_i", self._first_changed_roi_i())
                 if first_changed_roi>=0:
                     self._delete_roi_when_stacks(first_changed_roi)
-
-            # return the index of the roi that has moved data
-        # check if it is part of 3D roi stack
-        # move others in stack
 
     def _update_roi_param(self):#########################
         """Live update rois in the params object and the saved parameters file"""
@@ -414,7 +430,7 @@ class ProjectWidget(QWidget):
         self.viewer.layers['rois'].add_rectangles(new_rois, edge_color='r',
                                                   edge_width=10)
 
-        if i>0:
+        if width>1:
             # maintain dictionary that maps roi index to stackID and vice versa
             new_roi_i_list = []
             new_stackID = self.last_stackID+1
@@ -424,7 +440,10 @@ class ProjectWidget(QWidget):
                 new_roi_i_list.append(i)
             self.stackID_to_roi_indexes[new_stackID] = new_roi_i_list
             print("stackID_to_roi_indexes", self.stackID_to_roi_indexes)
+
             self.last_stackID = new_stackID
+            self.params.last_stackID = self.last_stackID
+            self.param.save_parameters()
         """
         current_dim_pos = self.viewer.dims.current_step
         new_roi = np.array(current_dim_pos)*np.ones((4, self.ndim))
@@ -453,8 +472,9 @@ class ProjectWidget(QWidget):
     def _on_click_select_project(self, event=None):
         """Select folder where to save rois and annotations."""
 
-        # if triggered by click to create new project, clear files
-        # otherwise triggered by firs file drag and drop and files should not be cleared
+        # is triggered by click to create new project, clear files
+        # otherwise triggered by first file drag and drop and files should
+        # not be cleared
         clear_files = event is not None
         self.save_annotations()
         self._close_project(clear_files=clear_files)            
@@ -489,7 +509,8 @@ class ProjectWidget(QWidget):
         self.roi_layer.mouse_drag_callbacks.append(self._roi_to_int_on_mouse_release)
 
     def _update_roi(self, event):
-        self._update_roi_3Dstack()
+
+        self._update_roi_3Dstack() # whenever you have stacks
         # synchronize roi coordinates with those saved in the params
         self._update_roi_param()
 
@@ -551,6 +572,9 @@ class ProjectWidget(QWidget):
     def _export_data(self, event=None):#####################
         """Export cropped data of the images and the annotations using the rois."""
 
+        def get_filename(filepath):
+            return os.path.basename(filepath)[:-4]
+
         if self.export_folder is None:
             self._on_click_select_export_folder()
 
@@ -562,34 +586,108 @@ class ProjectWidget(QWidget):
             labels_path.mkdir()
         
         image_counter = 0
-        fieldnames = ['file_name', 'image_index', 'roi_index']
+        fieldnames = ['file_path', 'file_name', 'image_index', 'roi_index',
+                      'nD', 'size']
         name_dict = []
         for i in range(self.file_list.count()):
             self.file_list.setCurrentRow(i)
+            stacksIDs_processed = []
+            roi_index_to_stackID = self.params.roi_index_to_stackID[self.file_list.currentItem().text()]
+            print(roi_index_to_stackID)
+
             for j in range(len(self.viewer.layers['rois'].data)):#######params
+
                 limits = self.viewer.layers['rois'].data[j].astype(int)
                 annotations_roi = self.viewer.layers['annotations'].data.copy()
-                channel = self.params.channels[self._get_current_file()]
+                channel = self.params.channels[self._get_current_file()]######
                 image_roi = self.viewer.layers[channel].data.copy()
-                
-                for n in range(self.ndim-2):
-                    annotations_roi = annotations_roi[limits[0,n]]
-                    image_roi = image_roi[limits[0,n]]
 
-                annotations_roi = annotations_roi[
-                    limits[0,-2]:limits[2,-2],
-                    limits[0,-1]:limits[1,-1]
-                ]
-                
-                image_roi = image_roi[
-                    limits[0,-2]:limits[2,-2],
-                    limits[0,-1]:limits[1,-1]
-                ]
+                # 2D ROI
 
-                imsave(images_path.joinpath(f'{self._source_name.text()}{image_counter}.tif'), image_roi, check_contrast=False)
-                imsave(labels_path.joinpath(f'{self._target_name.text()}{image_counter}.tif'), annotations_roi, check_contrast=False)
+                if j not in roi_index_to_stackID.keys():
+                    print(j, "is 2D roi", self.viewer.layers['rois'].data[j])
+                    # if image dimensions is more, take slices from start axes
+                    for n in range(self.ndim-2):
+                        annotations_roi = annotations_roi[limits[0,n]]
+                        image_roi = image_roi[limits[0,n]]
+
+                    annotations_roi = annotations_roi[
+                        limits[0,-2]:limits[2,-2],
+                        limits[0,-1]:limits[1,-1]
+                    ]
+
+                    image_roi = image_roi[
+                        limits[0,-2]:limits[2,-2],
+                        limits[0,-1]:limits[1,-1]
+                    ]
+
+                    filepath = self.file_list.currentItem().text()
+                    filename = get_filename(filepath)
+                    temp_dict = {
+                        'file_path': filepath,
+                        'file_name': filename,
+                        'image_index': image_counter,
+                        'roi_index': f"{j}",
+                        "nD": "2D",
+                        "size": f"{limits[2, -2]-limits[0, -2]}x"
+                                f"{limits[1, -1]-limits[0, -1]}"
+                    }
+
+                # 3D ROI
+                else:
+                    print(j, "is 3D roi")
+
+                    stackID = self.roi_index_to_stackID[j]
+                    if stackID in stacksIDs_processed:
+                        continue
+                    roi_indexes = self.stackID_to_roi_indexes[stackID]
+                    z_start = self.viewer.layers['rois'].data[roi_indexes[0]][0, -3].astype(int)
+                    z_end = self.viewer.layers['rois'].data[roi_indexes[-1]][0, -3].astype(int) + 1
+
+                    
+                    # if image dimensions is more, take slices from start axes
+                    for n in range(self.ndim - 3):
+                        annotations_roi = annotations_roi[limits[0, n]]
+                        image_roi = image_roi[limits[0, n]]
+                    
+                    annotations_roi = annotations_roi[
+                                      z_start:z_end,
+                                      limits[0, -2]:limits[2, -2],
+                                      limits[0, -1]:limits[1, -1]
+                                      ]
+
+                    image_roi = image_roi[
+                                z_start:z_end,
+                                limits[0, -2]:limits[2, -2],
+                                limits[0, -1]:limits[1, -1]
+                                ]
+
+                    stacksIDs_processed.append(stackID)
+                    if j != roi_indexes[0]:
+                        raise Warning("processing ROI in stack that isn't first ROI")### delete this - this is for debugging
+                    filepath = self.file_list.currentItem().text()
+                    filename = get_filename(filepath)
+                    temp_dict = {
+                        'file_path': filepath,
+                        'file_name': filename,
+                        'image_index': image_counter,
+                        'roi_index': f"{j}-{roi_indexes[-1]}",
+                        "nD": "3D",
+                        "size": f"{z_end-z_start}x"
+                                f"{limits[2, -2]-limits[0, -2]}x"
+                                f"{limits[1, -1]-limits[0, -1]}"
+                }
+
+
+                imsave(images_path.joinpath(f'{self._source_name.text()}'
+                                            f'{image_counter}'
+                                            f'_{filename}.tiff'),
+                       image_roi, check_contrast=False)
+                imsave(labels_path.joinpath(f'{self._target_name.text()}'
+                                            f'{image_counter}'
+                                            f'_{filename}.tiff'),
+                       annotations_roi, check_contrast=False)
                 image_counter += 1
-                temp_dict = {'file_name': self.file_list.currentItem().text(), 'image_index': image_counter, 'roi_index': j}
                 name_dict.append(temp_dict)
         
         # export information for rois e.g. from which image they were extracted
@@ -628,7 +726,7 @@ class ProjectWidget(QWidget):
         else:
             self.sel_channel.setCurrentRow(0)
         
-        # add annoations if any exist
+        # add annotations if any exist
         if self._create_annotation_filename_current().exists():
             self.viewer.layers['annotations'].data = imread(self._create_annotation_filename_current())
         
@@ -637,6 +735,21 @@ class ProjectWidget(QWidget):
             rois = self.params.rois[current_item.text()]
             rois = [np.array(x).reshape(4,self.ndim) for x in rois]
             self.viewer.layers['rois'].add_rectangles(rois, edge_color='r', edge_width=10)
+
+        # add stack info
+        if current_item.text() in self.params.roi_index_to_stackID.keys():
+            self.roi_index_to_stackID = self.params.roi_index_to_stackID[current_item.text()]
+        else:
+            self.roi_index_to_stackID = {}
+        if current_item.text() in self.params.stackID_to_roi_indexes.keys():
+            self.stackID_to_roi_indexes = self.params.stackID_to_roi_indexes[current_item.text()]
+        else:
+            self.stackID_to_roi_indexes[f] = {}
+        if current_item.text() in self.params.last_stackID.keys():
+            self.last_stackID = self.params.last_stackID[current_item.text()]
+        else:
+            self.last_stackID = -1
+
 
 class VHGroup():
     """Group box with specific layout
