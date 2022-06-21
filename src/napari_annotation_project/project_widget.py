@@ -122,8 +122,15 @@ class ProjectWidget(QWidget):
         self._target_name.setText("target_")
         self.names_group.glayout.addWidget(self._target_name, 4, 1, Qt.AlignTop)
 
+        self._keep_original_filename = QCheckBox('Keep original filename as '
+                                                 'suffix')
+        self._keep_original_filename.setChecked(True)
+        self.names_group.glayout.addWidget(self._keep_original_filename)
+
         self.btn_export_data = QPushButton("Export annotations")
         self._export_layout.addWidget(self.btn_export_data)
+
+
 
         self._add_connections()
 
@@ -678,14 +685,19 @@ class ProjectWidget(QWidget):
                                 f"{limits[1, -1]-limits[0, -1]}"
                 }
 
+                # add suffix with filename if ticked
+                if self._keep_original_filename.isChecked():
+                    suffix = f"_{filename}"
+                else:
+                    suffix = ''
 
                 imsave(images_path.joinpath(f'{self._source_name.text()}'
                                             f'{image_counter}'
-                                            f'_{filename}.tiff'),
+                                            f'{suffix}.tiff'),
                        image_roi, check_contrast=False)
                 imsave(labels_path.joinpath(f'{self._target_name.text()}'
                                             f'{image_counter}'
-                                            f'_{filename}.tiff'),
+                                            f'{suffix}.tiff'),
                        annotations_roi, check_contrast=False)
                 image_counter += 1
                 name_dict.append(temp_dict)
